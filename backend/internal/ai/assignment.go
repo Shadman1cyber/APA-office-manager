@@ -113,23 +113,51 @@ func ScoreCandidate(tp TaskProposal, person PersonInfo, facts []knowledge.Fact) 
 	}
 
 	var matches []string
-	for _, skill := range tp.RequiredSkills {
+	skillText := strings.ToLower(strings.Join([]string{tp.Title, tp.Topic, tp.Description, tp.ExpectedOutput}, " "))
+	keywordHits := 0
+	keywordChecks := 0
+	for _, skillName := range tp.RequiredSkills {
 		for _, s := range person.Skills {
-			if strings.EqualFold(skill, s) {
-				matches = append(matches, skill)
+			if strings.EqualFold(skillName, s) {
+				matches = append(matches, skillName)
 				break
 			}
 		}
 	}
+	for _, sk := range person.SkillDetail {
+		hits := []string{}
+		for _, kw := range sk.Keywords {
+			keywordChecks++
+			if kw != "" && strings.Contains(skillText, strings.ToLower(kw)) {
+				hits = append(hits, kw)
+			}
+		}
+		if len(hits) > 0 {
+			keywordHits += len(hits)
+			evidence = append(evidence, fmt.Sprintf(
+				"تطابق کلیدواژه مهارت «%s» با شرح وظیفه: %v",
+				sk.Name, hits,
+			))
+		}
+	}
+	_ = keywordChecks
+
 	skillRatio := 0.0
 	if len(tp.RequiredSkills) > 0 {
 		skillRatio = float64(len(matches)) / float64(len(tp.RequiredSkills))
+	}
+	kwBoost := 0.0
+	if keywordHits > 0 {
+		kwBoost = 0.15
 	}
 	for _, skill := range matches {
 		evidence = append(evidence, fmt.Sprintf("تطابق مهارت: %s", skill))
 	}
 
-	score := WeightOwnership*ownership + WeightSkills*skillRatio
+	score := WeightOwnership*ownership + WeightSkills*skillRatio + kwBoost
+	if score > 1 {
+		score = 1
+	}
 	return score, evidence
 }
 
@@ -210,7 +238,13 @@ func (l *llmAssignmentAgent) ProposeAssignments(ctx context.Context, tasks []Tas
 func describePeopleIDs(org *OrgContext) string {
 	out := ""
 	for _, p := range org.People {
-		out += fmt.Sprintf("- %s id=%s skills=%v\n", p.Name, p.ID, p.Skills)
+		out += fmt.Sprintf("- %s id=%s skills=%v\n", p.Name, p.ID, describePersonSkills(p))
+	}
+	if len(org.Skills) > 0 {
+		out += "تعریف مهارت‌های سازمان:\n"
+		for _, sd := range org.Skills {
+			out += fmt.Sprintf("- %s: %s (کلیدواژه‌ها: %v)\n", sd.Name, sd.Description, sd.Keywords)
+		}
 	}
 	return out
 }

@@ -7,9 +7,11 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/apa/backend/internal/domain/approval"
+	"github.com/apa/backend/internal/domain/document"
 	"github.com/apa/backend/internal/domain/knowledge"
 	"github.com/apa/backend/internal/domain/organization"
 	"github.com/apa/backend/internal/domain/question"
+	"github.com/apa/backend/internal/domain/skill"
 	"github.com/apa/backend/internal/domain/task"
 	"github.com/apa/backend/internal/domain/user"
 	"github.com/apa/backend/internal/domain/workflow"
@@ -34,6 +36,7 @@ type TaskRepository interface {
 	Assign(ctx context.Context, id uuid.UUID, userID *uuid.UUID, from, to task.Status) error
 	SaveProposal(ctx context.Context, id uuid.UUID, p *task.Proposal) error
 	SetCompletionNotes(ctx context.Context, id uuid.UUID, notes string) error
+	SetDeadline(ctx context.Context, orgID, id uuid.UUID, deadline *time.Time) error
 	SetVerified(ctx context.Context, id uuid.UUID, at time.Time) error
 	BlockTask(ctx context.Context, id uuid.UUID, from task.Status) error
 	WorkflowProgress(ctx context.Context, workflowID uuid.UUID) (total int, verified int, err error)
@@ -71,6 +74,21 @@ type KnowledgeRepository interface {
 	ListAllFacts(ctx context.Context, orgID uuid.UUID) ([]knowledge.Fact, error)
 	PeopleProfiles(ctx context.Context, orgID uuid.UUID) ([]knowledge.PersonProfile, error)
 	CountFacts(ctx context.Context, orgID uuid.UUID) (int, error)
+}
+
+type SkillRepository interface {
+	Create(ctx context.Context, sk *skill.Skill) error
+	List(ctx context.Context, orgID uuid.UUID) ([]skill.Skill, error)
+	Count(ctx context.Context, orgID uuid.UUID) (int, error)
+	ExistsByNames(ctx context.Context, orgID uuid.UUID, names []string) (map[string]bool, error)
+}
+
+type DocumentRepository interface {
+	Create(ctx context.Context, d *document.Document) error
+	Get(ctx context.Context, orgID, id uuid.UUID) (*document.Document, error)
+	UpdateResult(ctx context.Context, id uuid.UUID, title, body string, status document.Status) error
+	ListByOrg(ctx context.Context, orgID uuid.UUID, limit int) ([]*document.Document, error)
+	ListByAuthor(ctx context.Context, orgID, authorID uuid.UUID, limit int) ([]*document.Document, error)
 }
 
 type ChatRepository interface {

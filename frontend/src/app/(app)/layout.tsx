@@ -8,12 +8,14 @@ import type { User } from "@/lib/types";
 
 const memberNav = [
   { href: "/tasks", label: "وظایف من", icon: "✅" },
+  { href: "/documents", label: "اسناد من", icon: "📄" },
 ];
 
 const managerBaseNav = [
   { href: "/chat", label: "دستیار", icon: "💬" },
   { href: "/workflows", label: "گردش‌کارها", icon: "🗂" },
   { href: "/tasks", label: "وظایف", icon: "✅" },
+  { href: "/documents", label: "اسناد", icon: "📄" },
 ];
 
 const managerNav = [

@@ -3,6 +3,7 @@ package handlers
 import (
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -49,7 +50,7 @@ func (h *Handlers) GetTask(w http.ResponseWriter, r *http.Request) {
 	}
 	taskID, err := parseUUID(chi.URLParam(r, "id"))
 	if err != nil {
-		writeError(w, r, h.deps.Log, domain.Invalid("id", "invalid task id"))
+		writeError(w, r, h.deps.Log, domain.Invalid("id", "شناسه وظیفه نامعتبر است"))
 		return
 	}
 	t, err := h.deps.Tasks.Get(r.Context(), orgID, taskID)
@@ -74,7 +75,7 @@ func (h *Handlers) PatchTask(w http.ResponseWriter, r *http.Request) {
 	}
 	taskID, err := parseUUID(chi.URLParam(r, "id"))
 	if err != nil {
-		writeError(w, r, h.deps.Log, domain.Invalid("id", "invalid task id"))
+		writeError(w, r, h.deps.Log, domain.Invalid("id", "شناسه وظیفه نامعتبر است"))
 		return
 	}
 	var req patchTaskRequest
@@ -103,6 +104,51 @@ func (h *Handlers) PatchTask(w http.ResponseWriter, r *http.Request) {
 	writeData(w, http.StatusOK, map[string]any{"task": updated, "message": taskActionMessage(req.Action)})
 }
 
+type setDeadlineRequest struct {
+	Deadline *string `json:"deadline"`
+}
+
+func (h *Handlers) SetTaskDeadline(w http.ResponseWriter, r *http.Request) {
+	actor, err := h.actorUser(r)
+	if err != nil {
+		writeError(w, r, h.deps.Log, err)
+		return
+	}
+	taskID, err := parseUUID(chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, r, h.deps.Log, domain.Invalid("id", "شناسه وظیفه نامعتبر است"))
+		return
+	}
+	var req setDeadlineRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, r, h.deps.Log, err)
+		return
+	}
+	var deadline *time.Time
+	if req.Deadline != nil && *req.Deadline != "" {
+		parsed, perr := time.Parse(time.RFC3339, *req.Deadline)
+		if perr != nil {
+			writeError(w, r, h.deps.Log, domain.Invalid("deadline", "فرمت مهلت نامعتبر است"))
+			return
+		}
+		deadline = &parsed
+	}
+	if err := h.deps.Tasks.SetDeadline(r.Context(), actor, taskID, deadline); err != nil {
+		writeError(w, r, h.deps.Log, err)
+		return
+	}
+	t, terr := h.deps.Tasks.Get(r.Context(), actor.OrgID, taskID)
+	if terr != nil {
+		writeError(w, r, h.deps.Log, terr)
+		return
+	}
+	msg := "مهلت وظیفه حذف شد."
+	if deadline != nil {
+		msg = "مهلت وظیفه ثبت شد."
+	}
+	writeData(w, http.StatusOK, map[string]any{"task": t, "message": msg})
+}
+
 type assignTaskRequest struct {
 	UserID string `json:"userId"`
 }
@@ -115,7 +161,7 @@ func (h *Handlers) AssignTask(w http.ResponseWriter, r *http.Request) {
 	}
 	taskID, err := parseUUID(chi.URLParam(r, "id"))
 	if err != nil {
-		writeError(w, r, h.deps.Log, domain.Invalid("id", "invalid task id"))
+		writeError(w, r, h.deps.Log, domain.Invalid("id", "شناسه وظیفه نامعتبر است"))
 		return
 	}
 	var req assignTaskRequest

@@ -122,3 +122,50 @@ func (r *ResilientLearningAgent) ExtractKnowledge(ctx context.Context, answer st
 	}
 	return result, nil
 }
+
+type ResilientDocumentationAgent struct {
+	primary  DocumentationAgent
+	fallback DocumentationAgent
+	log      *slog.Logger
+}
+
+func NewResilientDocumentationAgent(primary, fallback DocumentationAgent, log *slog.Logger) *ResilientDocumentationAgent {
+	return &ResilientDocumentationAgent{primary: primary, fallback: fallback, log: log}
+}
+
+func (r *ResilientDocumentationAgent) GenerateDocument(ctx context.Context, in DocumentInput) (GeneratedDocument, error) {
+	result, err := r.primary.GenerateDocument(ctx, in)
+	if err != nil {
+		r.log.WarnContext(ctx, "documentation agent fell back to deterministic mode", slog.Any("error", err))
+		return r.fallback.GenerateDocument(ctx, in)
+	}
+	return result, nil
+}
+
+type ResilientDocGuardAgent struct {
+	primary  DocGuardAgent
+	fallback DocGuardAgent
+	log      *slog.Logger
+}
+
+func NewResilientDocGuardAgent(primary, fallback DocGuardAgent, log *slog.Logger) *ResilientDocGuardAgent {
+	return &ResilientDocGuardAgent{primary: primary, fallback: fallback, log: log}
+}
+
+func (r *ResilientDocGuardAgent) CheckNotes(ctx context.Context, authorName string, notes string) (NoteVerdict, error) {
+	verdict, err := r.primary.CheckNotes(ctx, authorName, notes)
+	if err != nil {
+		r.log.WarnContext(ctx, "doc notes guard fell back to deterministic mode", slog.Any("error", err))
+		return r.fallback.CheckNotes(ctx, authorName, notes)
+	}
+	return verdict, nil
+}
+
+func (r *ResilientDocGuardAgent) CheckDocument(ctx context.Context, in DocumentInput, body string) (DocVerdict, error) {
+	verdict, err := r.primary.CheckDocument(ctx, in, body)
+	if err != nil {
+		r.log.WarnContext(ctx, "doc coherence guard fell back to deterministic mode", slog.Any("error", err))
+		return r.fallback.CheckDocument(ctx, in, body)
+	}
+	return verdict, nil
+}

@@ -5,6 +5,7 @@ import { api } from "@/lib/api";
 import { getCachedUser } from "@/lib/auth";
 import type { Task } from "@/lib/types";
 import { Badge, Button, Card, Input, Spinner } from "@/components/ui";
+import { DeadlineChip } from "@/components/deadline";
 
 type Tab = "mine" | "pool" | "all";
 
@@ -27,11 +28,24 @@ export default function TasksPage() {
 
   useEffect(load, [load]);
 
-  async function act(task: Task, body: { action: string; notes?: string; guidance?: string }) {
+  async function act(task: Task, body: any) {
     setBusyId(task.id);
     setError(null);
+    setNotice(null);
     try {
-      await api.patchTask(task.id, body as any);
+      if (body.action === "__deadline__") {
+        const res = await api.setTaskDeadline(task.id, body.notes);
+        setNotice(res.message);
+        load();
+        return;
+      }
+      if (body.action === "__deadline_clear__") {
+        const res = await api.setTaskDeadline(task.id, null);
+        setNotice(res.message);
+        load();
+        return;
+      }
+      await api.patchTask(task.id, body);
       if (body.action === "claim") {
         setNotice("وظیفه به شما تخصیص یافت؛ در تب «وظایف من» می‌توانید شروع کنید.");
         setTab("mine");
@@ -169,6 +183,7 @@ function TaskItem({
         <div>
           <p className="text-sm font-medium">{task.title}</p>
           <p className="mt-0.5 text-xs text-slate-500">{task.description}</p>
+          <DeadlineChip task={task} />
           <p className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-400">
             <span>مسئول: {task.assigneeName ?? "—"}</span>
             {task.topic && <span>موضوع: {task.topic}</span>}
@@ -179,6 +194,10 @@ function TaskItem({
         </div>
         <Badge status={task.status} />
       </div>
+
+      {getCachedUser()?.role === "manager" && (
+        <DeadlineEditor task={task} busy={busy} onAct={onAct} />
+      )}
 
       {(canStart || canComplete || canResume) && (
         <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
@@ -255,5 +274,72 @@ function TaskItem({
         </p>
       )}
     </>
+  );
+}
+
+function tehranDate(iso: string): string {
+  return new Intl.DateTimeFormat("fa-IR", {
+    timeZone: "Asia/Tehran",
+    weekday: "short",
+    day: "numeric",
+    month: "long",
+  }).format(new Date(iso));
+}
+
+function DeadlineEditor({
+  task,
+  busy,
+  onAct,
+}: {
+  task: Task;
+  busy: boolean;
+  onAct: (task: Task, body: any) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [value, setValue] = useState(
+    task.deadline ? new Date(task.deadline).toISOString().slice(0, 16) : ""
+  );
+  if (!open) {
+    return (
+      <div className="mt-2">
+        <button
+          onClick={() => setOpen(true)}
+          className="text-[11px] text-slate-400 hover:text-indigo-600"
+        >
+          📅 تنظیم/تغییر مهلت
+        </button>
+      </div>
+    );
+  }
+  return (
+    <form
+      className="mt-2 flex flex-wrap items-center gap-2"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (!value) return;
+        onAct(task, { action: "__deadline__", notes: new Date(value).toISOString() });
+        setOpen(false);
+      }}
+    >
+      <input
+        type="datetime-local"
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm"
+      />
+      <Button
+        variant="secondary"
+        disabled={busy}
+        onClick={() => {
+          onAct(task, { action: "__deadline_clear__" });
+          setOpen(false);
+        }}
+      >
+        حذف مهلت
+      </Button>
+      <Button type="submit" disabled={busy || !value}>
+        ذخیرهٔ مهلت
+      </Button>
+    </form>
   );
 }

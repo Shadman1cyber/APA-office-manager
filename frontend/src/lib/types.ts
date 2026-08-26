@@ -58,6 +58,7 @@ export interface Task {
   dependsOn: string[];
   expectedOutput: string;
   status: TaskStatus;
+  deadline?: string;
   assignedTo?: string;
   assigneeName?: string;
   proposal?: Proposal;
@@ -126,6 +127,38 @@ export interface Fact {
   source: "seeded" | "learned";
   evidence: string;
   evidenceCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ManualTaskInput {
+  title: string;
+  description?: string;
+  topic?: string;
+  requiredSkills?: string[];
+  deadline?: string;
+  assignedTo?: string;
+}
+
+export interface Skill {
+  id: string;
+  orgId: string;
+  name: string;
+  description: string;
+  keywords: string[];
+}
+
+export interface DocumentItem {
+  id: string;
+  orgId: string;
+  taskId?: string;
+  workflowId?: string;
+  authorId: string;
+  authorName?: string;
+  title: string;
+  body: string;
+  sourceNotes?: string;
+  status: "generating" | "ready" | "failed";
   createdAt: string;
   updatedAt: string;
 }

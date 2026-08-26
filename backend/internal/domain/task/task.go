@@ -80,6 +80,7 @@ type Task struct {
 	DependsOn      []uuid.UUID `json:"dependsOn"`
 	ExpectedOutput string      `json:"expectedOutput"`
 	Status         Status      `json:"status"`
+	Deadline       *time.Time  `json:"deadline,omitempty"`
 	AssignedTo     *uuid.UUID  `json:"assignedTo,omitempty"`
 	AssigneeName   string      `json:"assigneeName,omitempty"`
 	Proposal       *Proposal   `json:"proposal,omitempty"`

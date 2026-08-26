@@ -12,6 +12,7 @@ var (
 	ErrInvalidState     = errors.New("invalid state")
 	ErrApprovalRequired = errors.New("approval required")
 	ErrInsufficientData = errors.New("insufficient organizational data")
+	ErrAlreadyExists    = errors.New("این مورد قبلاً ثبت شده است")
 	ErrEmailTaken       = errors.New("این ایمیل قبلاً ثبت شده است")
 )
 

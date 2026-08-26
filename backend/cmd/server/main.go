@@ -23,6 +23,7 @@ import (
 	"github.com/apa/backend/internal/application"
 	"github.com/apa/backend/internal/application/approval"
 	"github.com/apa/backend/internal/application/chat"
+	documentsvc "github.com/apa/backend/internal/application/document"
 	"github.com/apa/backend/internal/application/knowledge"
 	"github.com/apa/backend/internal/application/question"
 	"github.com/apa/backend/internal/application/task"
@@ -89,7 +90,12 @@ func run() error {
 	approvalsRepo := repository.NewApprovals(pool)
 	eventsRepo := repository.NewEvents(pool)
 	jobsRepo := repository.NewJobs(pool)
-	orgReader := repository.NewOrgReader(usersRepo, knowledgeRepo)
+	orgsRepo := repository.NewOrganizations(pool)
+	skillsRepo := repository.NewSkills(pool)
+	if err := seed.EnsureSkillCatalog(ctx, seed.SkillCatalogDeps{Orgs: orgsRepo, Skills: skillsRepo, Log: logger}); err != nil {
+		return fmt.Errorf("seed skill catalog: %w", err)
+	}
+	orgReader := repository.NewOrgReader(usersRepo, knowledgeRepo, skillsRepo)
 
 	bus := application.NewBus(eventsRepo, logger)
 
@@ -128,6 +134,25 @@ func run() error {
 		Bus:          bus,
 		Log:          logger,
 	})
+	documentRepo := repository.NewDocuments(pool)
+	documentService := documentsvc.NewService(documentsvc.Deps{
+		Documents: documentRepo,
+		Tasks:     tasksRepo,
+		Bus:       bus,
+		Jobs:      jobsRepo,
+		Agent: ai.NewResilientDocumentationAgent(
+			ai.NewDocumentationAgent(provider),
+			ai.NewDocumentationAgent(ai.NewMockProvider()),
+			logger,
+		),
+		Guard: ai.NewResilientDocGuardAgent(
+			ai.NewDocumentationGuardAgent(provider),
+			ai.NewDocumentationGuardAgent(ai.NewMockProvider()),
+			logger,
+		),
+		Fallback: ai.NewDocumentationAgent(ai.NewMockProvider()),
+		Log:      logger,
+	})
 	taskService := tasksvc.NewService(tasksvc.Deps{
 		Tasks:        tasksRepo,
 		Workflows:    workflowsRepo,
@@ -137,6 +162,7 @@ func run() error {
 		Orchestrator: orchestrator,
 		Bus:          bus,
 		Jobs:         jobsRepo,
+		Documenter:   documentService,
 		Log:          logger,
 	})
 	questionService := questionsvc.NewService(questionsvc.Deps{
@@ -152,6 +178,24 @@ func run() error {
 	chatService := chatsvc.NewService(workflowService, questionService, repository.NewChat(pool))
 
 	backgroundWorker := worker.New(jobsRepo, logger)
+	backgroundWorker.Register(documentsvc.GenerateJobType, func(jobCtx context.Context, payload []byte) error {
+		var p struct {
+			DocumentID string `json:"document_id"`
+			OrgID      string `json:"org_id"`
+		}
+		if err := json.Unmarshal(payload, &p); err != nil {
+			return fmt.Errorf("decode document job payload: %w", err)
+		}
+		docID, err := uuid.Parse(p.DocumentID)
+		if err != nil {
+			return fmt.Errorf("invalid document id: %w", err)
+		}
+		orgID, err := uuid.Parse(p.OrgID)
+		if err != nil {
+			return fmt.Errorf("invalid org id: %w", err)
+		}
+		return documentService.ProcessGeneration(jobCtx, orgID, docID)
+	})
 	backgroundWorker.Register(tasksvc.VerifyJobType, func(jobCtx context.Context, payload []byte) error {
 		var p struct {
 			TaskID string `json:"task_id"`
@@ -177,6 +221,7 @@ func run() error {
 		Tokens:    tokens,
 		Users:     usersRepo,
 		Orgs:      repository.NewOrganizations(pool),
+		Skills:    skillsRepo,
 		Bus:       bus,
 		Log:       logger,
 		Ping:      pool.Ping,
@@ -184,6 +229,7 @@ func run() error {
 		Tasks:     taskService,
 		Questions: questionService,
 		Knowledge: knowledgeService,
+		Documents: documentService,
 		Chat:      chatService,
 	})
 

@@ -13,14 +13,22 @@ import (
 )
 
 type PersonInfo struct {
-	ID     uuid.UUID `json:"id"`
-	Name   string    `json:"name"`
-	Skills []string  `json:"skills"`
+	ID          uuid.UUID     `json:"id"`
+	Name        string        `json:"name"`
+	Skills      []string      `json:"skills"`
+	SkillDetail []SkillDetail `json:"skillDetails,omitempty"`
+}
+
+type SkillDetail struct {
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Keywords    []string `json:"keywords,omitempty"`
 }
 
 type OrgContext struct {
 	People []PersonInfo     `json:"people"`
 	Facts  []knowledge.Fact `json:"facts"`
+	Skills []SkillDetail    `json:"skills"`
 }
 
 func NewOrgContext(users []user.User, facts []knowledge.Fact) *OrgContext {
@@ -53,9 +61,14 @@ func (o *OrgContext) PersonByID(id uuid.UUID) (PersonInfo, bool) {
 	return PersonInfo{}, false
 }
 
+type SkillReader interface {
+	ListSkills(ctx context.Context, orgID uuid.UUID) ([]SkillDetail, error)
+}
+
 type OrgDataReader interface {
 	ListUsers(ctx context.Context, orgID uuid.UUID) ([]user.User, error)
 	FindFacts(ctx context.Context, orgID uuid.UUID, kind knowledge.FactKind, subjects []string) ([]knowledge.Fact, error)
+	ListSkills(ctx context.Context, orgID uuid.UUID) ([]SkillDetail, error)
 }
 
 type ContextAgent struct {
@@ -75,7 +88,14 @@ func (c *ContextAgent) Gather(ctx context.Context, orgID uuid.UUID) (*OrgContext
 	if err != nil {
 		return nil, fmt.Errorf("gather knowledge: %w", err)
 	}
-	return NewOrgContext(users, facts), nil
+	orgCtx := NewOrgContext(users, facts)
+	orgCtx.Facts = facts
+	if sr, ok := c.reader.(SkillReader); ok {
+		if skills, serr := sr.ListSkills(ctx, orgID); serr == nil {
+			orgCtx.Skills = skills
+		}
+	}
+	return orgCtx, nil
 }
 
 var topicKeywords = map[string]string{
@@ -122,9 +142,26 @@ func DetectTopics(text string) []string {
 }
 
 var smallTalkPatterns = []string{
+	// English
 	"hi", "hello", "hey", "yo", "hiya", "thanks", "thank you", "thx",
 	"ok", "okay", "great", "nice", "cool", "good morning", "good afternoon",
-	"good evening", "how are you", "lol", "test", "bye",
+	"good evening", "how are you", "lol", "test", "bye", "bye bye",
+	"yes", "no", "sure", "please", "welcome", "congrats", "congratulations",
+	// Persian
+	"سلام", "درود", "خسته نباشید", "ممنون", "متشکرم", "ممنونم",
+	"خوبی", "خوب هستید", "چطوری", "چطورید", "چه خبر", "حالتون خوبه",
+	"باشه", "بله", "نه", "خب", "عالیه", "خیلی خوبه", "جالبه",
+	"ممنونم ازتون", "خداحافظ", "فعلاً", "روز بخیر", "صبح بخیر",
+	"شب بخیر", "عصر بخیر", "خدا حافظ",
+	"tok", "close", "great", "nice", "amazing", "perfect",
+}
+
+var persianConversationalPhrases = []string{
+	"چطوری", "چطورید", "خوبی", "خوب هستید", "چه خبر", "حالتون خوبه",
+	"خسته نباشید", "ممنون", "متشکرم", "ممنونم",
+	"باشه", "بله", "نه", "خب", "عالیه", "خیلی خوبه", "جالبه",
+	"سلام", "درود", "خداحافظ", "روز بخیر", "صبح بخیر",
+	"شب بخیر", "عصر بخیر", "خدا حافظ",
 }
 
 var taskVerbs = []string{
@@ -145,22 +182,45 @@ func containsTaskVerb(lower string) bool {
 }
 
 func ClassifyIntent(text string) string {
-	lower := strings.ToLower(strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(text), ".")))
+	trimmed := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(text), "."))
+	lower := strings.ToLower(trimmed)
+
+	// Exact or prefix match against patterns
 	for _, p := range smallTalkPatterns {
 		if lower == p || strings.HasPrefix(lower, p+" ") || strings.HasPrefix(lower, p+",") {
 			return IntentKindSmallTalk
 		}
 	}
-	if len([]rune(lower)) < 18 && !containsTaskVerb(lower) {
+
+	// Contains a Persian conversational phrase → smalltalk
+	trimmedRunes := []rune(trimmed)
+	for _, phrase := range persianConversationalPhrases {
+		if strings.Contains(trimmed, phrase) {
+			return IntentKindSmallTalk
+		}
+	}
+
+	// Short message without any task verb → smalltalk
+	if len(trimmedRunes) < 24 && !containsTaskVerb(lower) && !containsTopicKeyword(lower) {
 		return IntentKindSmallTalk
 	}
-	reportWords := []string{"report", "summary", "presentation", "brief"}
+
+	reportWords := []string{"report", "summary", "presentation", "brief", "گزارش", "خلاصه", "ارائه"}
 	for _, w := range reportWords {
 		if strings.Contains(lower, w) {
 			return IntentKindReport
 		}
 	}
 	return IntentKindGeneral
+}
+
+func containsTopicKeyword(lower string) bool {
+	for _, kw := range sortedTopicKeywords {
+		if strings.Contains(lower, kw) {
+			return true
+		}
+	}
+	return false
 }
 
 func UpperFirst(s string) string {

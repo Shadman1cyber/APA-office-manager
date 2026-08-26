@@ -10,7 +10,6 @@ import (
 	"github.com/apa/backend/internal/domain"
 	domainUser "github.com/apa/backend/internal/domain/user"
 )
-
 type loginRequest struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
@@ -50,6 +49,17 @@ func (h *Handlers) Register(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, r, h.deps.Log, err)
 		return
+	}
+
+	// Ensure at least one organization exists (first user becomes manager)
+	org, err = h.deps.Orgs.First(r.Context())
+	if err != nil {
+		// Create organization if none exists
+		org, err = h.deps.Orgs.Create(r.Context(), req.Name)
+		if err != nil {
+			writeError(w, r, h.deps.Log, err)
+			return
+		}
 	}
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)

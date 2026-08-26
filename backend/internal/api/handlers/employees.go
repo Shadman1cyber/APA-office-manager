@@ -92,6 +92,11 @@ func (h *Handlers) CreateEmployee(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if verr := h.validateSkillsAgainstCatalog(r, org.ID, skills); verr != nil {
+		writeError(w, r, h.deps.Log, verr)
+		return
+	}
+
 	newUser := user.User{
 		OrgID:  org.ID,
 		Email:  req.Email,
@@ -145,6 +150,10 @@ func (h *Handlers) UpdateEmployee(w http.ResponseWriter, r *http.Request) {
 	var skills []string
 	if req.Skills != nil {
 		skills = normalizeSkills(req.Skills)
+		if verr := h.validateSkillsAgainstCatalog(r, actor.OrgID, skills); verr != nil {
+			writeError(w, r, h.deps.Log, verr)
+			return
+		}
 	}
 	if role == nil && req.Skills == nil {
 		writeError(w, r, h.deps.Log, domain.Invalid("body", "نقش و/یا مهارت‌ها را برای به‌روزرسانی مشخص کنید"))

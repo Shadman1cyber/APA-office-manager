@@ -26,11 +26,12 @@ func (r *Tasks) CreateBatch(ctx context.Context, list []*task.Task) error {
 	for _, t := range list {
 		batch.Queue(
 			`INSERT INTO tasks (org_id, workflow_id, position, title, description, topic,
-			                    required_skills, depends_on, expected_output, status)
-			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+			                    required_skills, depends_on, expected_output, status, deadline, assigned_to)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
 			 RETURNING id, created_at, updated_at`,
 			t.OrgID, t.WorkflowID, t.Position, t.Title, t.Description, t.Topic,
-			textArray(t.RequiredSkills), uuidArray(t.DependsOn), nullIfEmptyStr(t.ExpectedOutput), string(t.Status),
+			textArray(t.RequiredSkills), uuidArray(t.DependsOn), nullIfEmptyStr(t.ExpectedOutput),
+			string(t.Status), nullableTime(t.Deadline), t.AssignedTo,
 		)
 	}
 	br := r.pool.SendBatch(ctx, batch)
@@ -64,7 +65,7 @@ func (r *Tasks) SetDependencies(ctx context.Context, deps map[uuid.UUID][]uuid.U
 
 const taskColumns = `t.id, t.org_id, t.workflow_id, t.position, t.title, t.description, t.topic,
 	t.required_skills, t.depends_on, t.expected_output, t.status, t.assigned_to, u.name,
-	t.proposal, t.completed_notes, t.verified_at, t.created_at, t.updated_at`
+	t.deadline, t.proposal, t.completed_notes, t.verified_at, t.created_at, t.updated_at`
 
 const taskFrom = `FROM tasks t LEFT JOIN users u ON u.id = t.assigned_to`
 
@@ -78,15 +79,17 @@ func scanTask(row rowScanner) (*task.Task, error) {
 	var proposalBytes []byte
 	var assignedTo *uuid.UUID
 	var assigneeName *string
+	var deadline *time.Time
 	if err := row.Scan(
 		&t.ID, &t.OrgID, &t.WorkflowID, &t.Position, &t.Title, &t.Description, &t.Topic,
 		&t.RequiredSkills, &t.DependsOn, &t.ExpectedOutput, &status, &assignedTo, &assigneeName,
-		&proposalBytes, &t.CompletedNotes, &t.VerifiedAt, &t.CreatedAt, &t.UpdatedAt,
+		&deadline, &proposalBytes, &t.CompletedNotes, &t.VerifiedAt, &t.CreatedAt, &t.UpdatedAt,
 	); err != nil {
 		return nil, mapErr(err)
 	}
 	t.Status = task.Status(status)
 	t.AssignedTo = assignedTo
+	t.Deadline = deadline
 	if assigneeName != nil {
 		t.AssigneeName = *assigneeName
 	}
@@ -178,7 +181,7 @@ func (r *Tasks) UpdateStatusExpected(ctx context.Context, id uuid.UUID, from, to
 	tag, err := r.pool.Exec(ctx,
 		`UPDATE tasks SET status = $3, updated_at = now() WHERE id = $1 AND status = $2`,
 		id, string(from), string(to))
-	return expectAffected(tag, err, "task state changed concurrently")
+	return expectAffected(tag, err, "وضعیت وظیفه هم‌زمان تغییر کرده است؛ صفحه را تازه‌سازی کنید")
 }
 
 func (r *Tasks) Assign(ctx context.Context, id uuid.UUID, userID *uuid.UUID, from, to task.Status) error {
@@ -186,7 +189,7 @@ func (r *Tasks) Assign(ctx context.Context, id uuid.UUID, userID *uuid.UUID, fro
 		`UPDATE tasks SET assigned_to = $2, status = $4, updated_at = now()
 		 WHERE id = $1 AND status = $3`,
 		id, userID, string(from), string(to))
-	return expectAffected(tag, err, "task state changed concurrently")
+	return expectAffected(tag, err, "وضعیت وظیفه هم‌زمان تغییر کرده است؛ صفحه را تازه‌سازی کنید")
 }
 
 func (r *Tasks) SaveProposal(ctx context.Context, id uuid.UUID, p *task.Proposal) error {
@@ -200,27 +203,27 @@ func (r *Tasks) SaveProposal(ctx context.Context, id uuid.UUID, p *task.Proposal
 	}
 	tag, err := r.pool.Exec(ctx,
 		`UPDATE tasks SET proposal = $2::jsonb, updated_at = now() WHERE id = $1`, id, raw)
-	return expectAffected(tag, err, "task not found")
+	return expectAffected(tag, err, "وظیفه یافت نشد")
 }
 
 func (r *Tasks) SetCompletionNotes(ctx context.Context, id uuid.UUID, notes string) error {
 	tag, err := r.pool.Exec(ctx,
 		`UPDATE tasks SET completed_notes = $2, updated_at = now() WHERE id = $1`, id, notes)
-	return expectAffected(tag, err, "task not found")
+	return expectAffected(tag, err, "وظیفه یافت نشد")
 }
 
 func (r *Tasks) SetVerified(ctx context.Context, id uuid.UUID, at time.Time) error {
 	tag, err := r.pool.Exec(ctx,
 		`UPDATE tasks SET status = 'verified', verified_at = $2, updated_at = now()
 		 WHERE id = $1 AND status = 'completed'`, id, at)
-	return expectAffected(tag, err, "task state changed concurrently")
+	return expectAffected(tag, err, "وضعیت وظیفه هم‌زمان تغییر کرده است؛ صفحه را تازه‌سازی کنید")
 }
 
 func (r *Tasks) BlockTask(ctx context.Context, id uuid.UUID, from task.Status) error {
 	tag, err := r.pool.Exec(ctx,
 		`UPDATE tasks SET status = 'blocked', updated_at = now() WHERE id = $1 AND status = $2`,
 		id, string(from))
-	return expectAffected(tag, err, "task state changed concurrently")
+	return expectAffected(tag, err, "وضعیت وظیفه هم‌زمان تغییر کرده است؛ صفحه را تازه‌سازی کنید")
 }
 
 func (r *Tasks) WorkflowProgress(ctx context.Context, workflowID uuid.UUID) (int, int, error) {
@@ -251,4 +254,18 @@ func nullIfEmptyStr(s string) any {
 		return ""
 	}
 	return s
+}
+
+func nullableTime(t *time.Time) any {
+	if t == nil {
+		return nil
+	}
+	return *t
+}
+
+func (r *Tasks) SetDeadline(ctx context.Context, orgID, id uuid.UUID, deadline *time.Time) error {
+	tag, err := r.pool.Exec(ctx,
+		`UPDATE tasks SET deadline = $3, updated_at = now() WHERE id = $1 AND org_id = $2`,
+		id, orgID, deadline)
+	return expectAffected(tag, err, "وظیفه یافت نشد")
 }

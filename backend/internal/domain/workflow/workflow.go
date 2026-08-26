@@ -18,12 +18,13 @@ const (
 	StatusInProgress Status = "in_progress"
 	StatusCompleted  Status = "completed"
 	StatusFailed     Status = "failed"
+	StatusCancelled  Status = "cancelled"
 )
 
 func ParseStatus(raw string) (Status, error) {
 	s := Status(raw)
 	switch s {
-	case StatusProposed, StatusApproved, StatusRejected, StatusInProgress, StatusCompleted, StatusFailed:
+	case StatusProposed, StatusApproved, StatusRejected, StatusInProgress, StatusCompleted, StatusFailed, StatusCancelled:
 		return s, nil
 	default:
 		return "", fmt.Errorf("%w: unknown workflow status %q", domain.ErrInvalidState, raw)
@@ -31,12 +32,13 @@ func ParseStatus(raw string) (Status, error) {
 }
 
 var allowedTransitions = map[Status][]Status{
-	StatusProposed:   {StatusApproved, StatusRejected},
-	StatusApproved:   {StatusInProgress, StatusFailed},
-	StatusInProgress: {StatusCompleted, StatusFailed},
+	StatusProposed:   {StatusApproved, StatusRejected, StatusCancelled},
+	StatusApproved:   {StatusInProgress, StatusFailed, StatusCancelled},
+	StatusInProgress: {StatusCompleted, StatusFailed, StatusCancelled},
 	StatusCompleted:  {},
 	StatusRejected:   {},
 	StatusFailed:     {},
+	StatusCancelled:  {},
 }
 
 func CanTransition(from, to Status) bool {

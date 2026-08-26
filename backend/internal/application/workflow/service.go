@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -40,7 +41,7 @@ func NewService(deps Deps) *Service {
 	return &Service{deps: deps}
 }
 
-func (s *Service) Create(ctx context.Context, actor *user.User, intentText string) (*View, error) {
+func (s *Service) Create(ctx context.Context, actor *user.User, intentText string, deadline *time.Time) (*View, error) {
 	intentText = strings.TrimSpace(intentText)
 	if intentText == "" {
 		return nil, domain.Invalid("intent", "در یک جمله بگویید چه کاری نیاز دارید")
@@ -57,12 +58,12 @@ func (s *Service) Create(ctx context.Context, actor *user.User, intentText strin
 		return nil, err
 	}
 	if outcome.Intent.Kind == ai.IntentKindSmallTalk {
-		return nil, fmt.Errorf("%w: that doesn't look like a task", ai.ErrSmallTalk)
+		return nil, fmt.Errorf("%w: این پیام شبیه یک کار نیست", ai.ErrSmallTalk)
 	}
-	return s.persistPlan(ctx, actor, intentText, outcome)
+	return s.persistPlan(ctx, actor, intentText, outcome, deadline)
 }
 
-func (s *Service) persistPlan(ctx context.Context, actor *user.User, intentText string, outcome *ai.PlanOutcome) (*View, error) {
+func (s *Service) persistPlan(ctx context.Context, actor *user.User, intentText string, outcome *ai.PlanOutcome, deadline *time.Time) (*View, error) {
 	wf, err := workflow.New(actor.OrgID, actor.ID, outcome.Plan.Title, intentText)
 	if err != nil {
 		return nil, err
@@ -86,10 +87,11 @@ func (s *Service) persistPlan(ctx context.Context, actor *user.User, intentText 
 			RequiredSkills: tp.RequiredSkills,
 			ExpectedOutput: tp.ExpectedOutput,
 			Status:         task.StatusProposed,
+			Deadline:       deadline,
 		}
 	}
 	if len(tasksList) == 0 {
-		return nil, fmt.Errorf("%w: plan produced no tasks", domain.ErrInsufficientData)
+		return nil, fmt.Errorf("%w: برنامه‌ای با وظیفهٔ خالی ساخته نمی‌شود", domain.ErrInsufficientData)
 	}
 	if err := s.deps.Tasks.CreateBatch(ctx, tasksList); err != nil {
 		return nil, fmt.Errorf("create plan tasks: %w", err)
@@ -303,10 +305,31 @@ func (s *Service) Approve(ctx context.Context, actor *user.User, id uuid.UUID) (
 	return view, assignedSummaries, nil
 }
 
-func (s *Service) Reject(ctx context.Context, actor *user.User, id uuid.UUID, reason string) (*View, error) {
+func (s *Service) Delete(ctx context.Context, actor *user.User, id uuid.UUID) error {
 	if !actor.Role.CanApprove() {
-		return nil, fmt.Errorf("%w: فقط مدیران می‌توانند گردش‌کار را رد کنند", domain.ErrForbidden)
+		return fmt.Errorf("%w: تنها مدیر می‌تواند گردش‌کار حذف کند", domain.ErrForbidden)
 	}
+
+	wf, err := s.deps.Workflows.Get(ctx, actor.OrgID, id)
+	if err != nil {
+		return fmt.Errorf("get workflow: %w", err)
+	}
+
+	if err := wf.TransitionTo(workflow.StatusCancelled); err != nil {
+		return fmt.Errorf("cancel workflow: %w", err)
+	}
+
+	if err := s.deps.Workflows.UpdateStatusExpected(ctx, actor.OrgID, wf.ID, workflow.StatusProposed, workflow.StatusCancelled); err != nil {
+		return fmt.Errorf("update workflow status: %w", err)
+	}
+
+	s.publish(ctx, actor, application.EventWorkflowCancelled, "workflow", wf.ID, map[string]any{
+		"title": wf.Title,
+	})
+
+	return nil
+}
+func (s *Service) Reject(ctx context.Context, actor *user.User, id uuid.UUID, reason string) (*View, error) {
 	wf, err := s.deps.Workflows.Get(ctx, actor.OrgID, id)
 	if err != nil {
 		return nil, err
@@ -359,4 +382,121 @@ func evidenceToAny(ev []string) []string {
 		return []string{}
 	}
 	return ev
+}
+
+type ManualTaskInput struct {
+	Title          string
+	Description    string
+	Topic          string
+	RequiredSkills []string
+	Deadline       *time.Time
+	AssignedTo     *uuid.UUID
+}
+
+type ManualWorkflowInput struct {
+	Title    string
+	Intent   string
+	Deadline *time.Time
+	Tasks    []ManualTaskInput
+}
+
+func (s *Service) CreateManual(ctx context.Context, actor *user.User, in ManualWorkflowInput) (*View, error) {
+	in.Title = strings.TrimSpace(in.Title)
+	if in.Title == "" {
+		return nil, domain.Invalid("title", "عنوان گردش‌کار الزامی است")
+	}
+	if len(in.Tasks) == 0 || len(in.Tasks) > 20 {
+		return nil, domain.Invalid("tasks", "حداقل یک و حداکثر ۲۰ وظیفه لازم است")
+	}
+
+	wf := &workflow.Workflow{
+		OrgID:     actor.OrgID,
+		CreatedBy: actor.ID,
+		Title:     in.Title,
+		Intent:    firstNonEmptyStr(in.Intent, "تعریف دستی توسط "+actor.Name),
+		Status:    workflow.StatusApproved,
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	}
+	if err := s.deps.Workflows.Create(ctx, wf); err != nil {
+		return nil, fmt.Errorf("create workflow: %w", err)
+	}
+	s.publish(ctx, actor, application.EventWorkflowCreated, "workflow", wf.ID, map[string]any{
+		"title": wf.Title,
+		"mode":  "manual",
+	})
+
+	tasksList := make([]*task.Task, len(in.Tasks))
+	for i := range in.Tasks {
+		mt := in.Tasks[i]
+		status := task.StatusPending
+		var assignee *uuid.UUID
+		if mt.AssignedTo != nil {
+			status = task.StatusAssigned
+			assignee = mt.AssignedTo
+		}
+		tasksList[i] = &task.Task{
+			OrgID:          actor.OrgID,
+			WorkflowID:     wf.ID,
+			Position:       i,
+			Title:          strings.TrimSpace(mt.Title),
+			Description:    strings.TrimSpace(mt.Description),
+			Topic:          strings.TrimSpace(mt.Topic),
+			RequiredSkills: mt.RequiredSkills,
+			ExpectedOutput: "",
+			Status:         status,
+			AssignedTo:     assignee,
+			Deadline:       mt.Deadline,
+		}
+		if tasksList[i].Title == "" {
+			return nil, domain.Invalid("tasks", fmt.Sprintf("عنوان وظیفهٔ %d الزامی است", i+1))
+		}
+	}
+	if err := s.deps.Tasks.CreateBatch(ctx, tasksList); err != nil {
+		return nil, fmt.Errorf("create tasks: %w", err)
+	}
+
+	for _, t := range tasksList {
+		if t.AssignedTo == nil {
+			continue
+		}
+		assignee, err := s.deps.Users.Get(ctx, *t.AssignedTo)
+		if err != nil {
+			continue
+		}
+		_ = s.deps.Tasks.SaveProposal(ctx, t.ID, &task.Proposal{
+			CandidateUserID:           &assignee.ID,
+			CandidateName:             assignee.Name,
+			Evidence:                  []string{"تخصیص مستقیم توسط " + actor.Name},
+			Confidence:                1,
+			RequiresHumanConfirmation: false,
+		})
+		s.publish(ctx, actor, application.EventTaskAssigned, "task", t.ID, map[string]any{
+			"assignee":    assignee.Name,
+			"manual":      true,
+			"workflow_id": wf.ID.String(),
+		})
+	}
+
+	planPayload, _ := json.Marshal(map[string]any{"mode": "manual", "title": in.Title, "task_count": len(tasksList)})
+	if _, err := s.deps.Approvals.CreatePlanApproval(ctx, actor.OrgID, wf.ID, planPayload); err != nil {
+		return nil, err
+	}
+	if appr, err := s.deps.Approvals.LatestPlan(ctx, wf.ID); err == nil {
+		_ = s.deps.Approvals.Decide(ctx, appr.ID, approval.StatusApproved, actor.ID)
+	}
+	s.publish(ctx, actor, application.EventPlanGenerated, "workflow", wf.ID, map[string]any{"task_count": len(tasksList)})
+	s.publish(ctx, actor, application.EventWorkflowApproved, "workflow", wf.ID, map[string]any{
+		"title": wf.Title,
+		"mode":  "manual",
+	})
+
+	return s.Get(ctx, actor.OrgID, wf.ID)
+}
+
+func firstNonEmptyStr(a, b string) string {
+	if strings.TrimSpace(a) != "" {
+		return a
+	}
+	return b
 }

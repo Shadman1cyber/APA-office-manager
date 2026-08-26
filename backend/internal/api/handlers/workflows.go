@@ -5,10 +5,12 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/apa/backend/internal/application/chat"
+	workflowsvc "github.com/apa/backend/internal/application/workflow"
 	"github.com/apa/backend/internal/domain"
 	"github.com/apa/backend/internal/domain/workflow"
 )
@@ -44,7 +46,8 @@ func (h *Handlers) ListWorkflows(w http.ResponseWriter, r *http.Request) {
 }
 
 type createWorkflowRequest struct {
-	Intent string `json:"intent"`
+	Intent   string `json:"intent"`
+	Deadline string `json:"deadline"`
 }
 
 func (h *Handlers) CreateWorkflow(w http.ResponseWriter, r *http.Request) {
@@ -62,7 +65,20 @@ func (h *Handlers) CreateWorkflow(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, h.deps.Log, err)
 		return
 	}
-	view, err := h.deps.Workflows.Create(r.Context(), actor, req.Intent)
+	var deadline *time.Time
+	if req.Deadline != "" {
+		parsed, perr := time.Parse(time.RFC3339, req.Deadline)
+		if perr != nil {
+			writeError(w, r, h.deps.Log, domain.Invalid("deadline", "فرمت مهلت نامعتبر است"))
+			return
+		}
+		if parsed.Before(time.Now()) {
+			writeError(w, r, h.deps.Log, domain.Invalid("deadline", "مهلت باید در آینده باشد"))
+			return
+		}
+		deadline = &parsed
+	}
+	view, err := h.deps.Workflows.Create(r.Context(), actor, req.Intent, deadline)
 	if err != nil {
 		writeError(w, r, h.deps.Log, err)
 		return
@@ -79,6 +95,9 @@ func (h *Handlers) CreateWorkflow(w http.ResponseWriter, r *http.Request) {
 		reply.QuestionID = &qid
 		reply.Text += "\n\n" + first.Text
 	} else {
+		if deadline != nil {
+			reply.Text += "\nمهلت انجام همهٔ وظایف: " + deadline.In(time.FixedZone("Asia/Tehran", 3*3600+1800)).Format("2006/01/02 ۱۵:۰۴")
+		}
 		reply.Text += "\nبرای تأیید برنامه بگویید «تأیید»."
 	}
 	writeData(w, http.StatusCreated, reply)
@@ -97,7 +116,7 @@ func (h *Handlers) GetWorkflow(w http.ResponseWriter, r *http.Request) {
 	}
 	wfID, err := parseUUID(chi.URLParam(r, "id"))
 	if err != nil {
-		writeError(w, r, h.deps.Log, domain.Invalid("id", "invalid workflow id"))
+		writeError(w, r, h.deps.Log, domain.Invalid("id", "شناسه گردش‌کار نامعتبر است"))
 		return
 	}
 	view, err := h.deps.Workflows.Get(r.Context(), orgID, wfID)
@@ -125,6 +144,103 @@ func (h *Handlers) GetWorkflow(w http.ResponseWriter, r *http.Request) {
 	writeData(w, http.StatusOK, view)
 }
 
+type manualTaskRequest struct {
+	Title          string   `json:"title"`
+	Description    string   `json:"description"`
+	Topic          string   `json:"topic"`
+	RequiredSkills []string `json:"requiredSkills"`
+	Deadline       string   `json:"deadline"`
+	AssignedTo     string   `json:"assignedTo"`
+}
+
+type createManualWorkflowRequest struct {
+	Title    string              `json:"title"`
+	Intent   string              `json:"intent"`
+	Deadline string              `json:"deadline"`
+	Tasks    []manualTaskRequest `json:"tasks"`
+}
+
+func (h *Handlers) CreateManualWorkflow(w http.ResponseWriter, r *http.Request) {
+	actor, err := h.actorUser(r)
+	if err != nil {
+		writeError(w, r, h.deps.Log, err)
+		return
+	}
+	if !actor.Role.CanApprove() {
+		writeError(w, r, h.deps.Log, fmt.Errorf("%w: تعریف دستی گردش‌کار فقط برای مدیران مجاز است", domain.ErrForbidden))
+		return
+	}
+
+	var req createManualWorkflowRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, r, h.deps.Log, err)
+		return
+	}
+
+	var defaultDeadline *time.Time
+	if req.Deadline != "" {
+		parsed, perr := time.Parse(time.RFC3339, req.Deadline)
+		if perr != nil {
+			writeError(w, r, h.deps.Log, domain.Invalid("deadline", "فرمت مهلت نامعتبر است"))
+			return
+		}
+		defaultDeadline = &parsed
+	}
+
+	in := workflowsvc.ManualWorkflowInput{
+		Title:    req.Title,
+		Intent:   req.Intent,
+		Deadline: defaultDeadline,
+	}
+
+	for i, mt := range req.Tasks {
+		mi := workflowsvc.ManualTaskInput{
+			Title:          mt.Title,
+			Description:    mt.Description,
+			Topic:          mt.Topic,
+			RequiredSkills: normalizeSkills(mt.RequiredSkills),
+		}
+		if verr := h.validateSkillsAgainstCatalog(r, actor.OrgID, mi.RequiredSkills); verr != nil {
+			writeError(w, r, h.deps.Log, domain.Invalid(fmt.Sprintf("tasks[%d].requiredSkills", i), "برای وظیفهٔ «"+mt.Title+"» "+verr.Error()))
+			return
+		}
+		if mt.Deadline != "" {
+			parsed, perr := time.Parse(time.RFC3339, mt.Deadline)
+			if perr != nil {
+				writeError(w, r, h.deps.Log, domain.Invalid(fmt.Sprintf("tasks[%d].deadline", i), "فرمت مهلت نامعتبر است"))
+				return
+			}
+			mi.Deadline = &parsed
+		} else {
+			mi.Deadline = defaultDeadline
+		}
+		if mt.AssignedTo != "" {
+			parsed, perr := parseUUID(mt.AssignedTo)
+			if perr != nil {
+				writeError(w, r, h.deps.Log, domain.Invalid(fmt.Sprintf("tasks[%d].assignedTo", i), "شناسه مسئول نامعتبر است"))
+				return
+			}
+			assignee, aerr := h.deps.Users.Get(r.Context(), parsed)
+			if aerr != nil || assignee.OrgID != actor.OrgID {
+				writeError(w, r, h.deps.Log, domain.Invalid(fmt.Sprintf("tasks[%d].assignedTo", i), "مسئول باید عضو همین سازمان باشد"))
+				return
+			}
+			mi.AssignedTo = &parsed
+		}
+		in.Tasks = append(in.Tasks, mi)
+	}
+
+	view, err := h.deps.Workflows.CreateManual(r.Context(), actor, in)
+	if err != nil {
+		writeError(w, r, h.deps.Log, err)
+		return
+	}
+	writeData(w, http.StatusCreated, map[string]any{
+		"message":  fmt.Sprintf("گردش‌کار «%s» با %d وظیفه ساخته شد.", view.Workflow.Title, len(view.Tasks)),
+		"workflow": view,
+	})
+}
+
 type rejectRequest struct {
 	Reason string `json:"reason"`
 }
@@ -137,7 +253,7 @@ func (h *Handlers) ApproveWorkflow(w http.ResponseWriter, r *http.Request) {
 	}
 	wfID, err := parseUUID(chi.URLParam(r, "id"))
 	if err != nil {
-		writeError(w, r, h.deps.Log, domain.Invalid("id", "invalid workflow id"))
+		writeError(w, r, h.deps.Log, domain.Invalid("id", "شناسه گردش‌کار نامعتبر است"))
 		return
 	}
 	view, assigned, err := h.deps.Workflows.Approve(r.Context(), actor, wfID)
@@ -164,7 +280,7 @@ func (h *Handlers) RejectWorkflow(w http.ResponseWriter, r *http.Request) {
 	}
 	wfID, err := parseUUID(chi.URLParam(r, "id"))
 	if err != nil {
-		writeError(w, r, h.deps.Log, domain.Invalid("id", "invalid workflow id"))
+		writeError(w, r, h.deps.Log, domain.Invalid("id", "شناسه گردش‌کار نامعتبر است"))
 		return
 	}
 	var req rejectRequest
@@ -175,6 +291,31 @@ func (h *Handlers) RejectWorkflow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeData(w, http.StatusOK, view)
+}
+
+func (h *Handlers) DeleteWorkflow(w http.ResponseWriter, r *http.Request) {
+	actor, err := h.actorUser(r)
+	if err != nil {
+		writeError(w, r, h.deps.Log, err)
+		return
+	}
+	if !actor.Role.CanApprove() {
+		writeError(w, r, h.deps.Log, fmt.Errorf("%w: تنها مدیر می‌تواند گردش‌کار حذف کند", domain.ErrForbidden))
+		return
+	}
+	wfID, err := parseUUID(chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, r, h.deps.Log, domain.Invalid("id", "شناسه گردش‌کار نامعتبر است"))
+		return
+	}
+	if err := h.deps.Workflows.Delete(r.Context(), actor, wfID); err != nil {
+		writeError(w, r, h.deps.Log, err)
+		return
+	}
+	writeData(w, http.StatusOK, map[string]any{
+		"success":  true,
+		"message":  "گردش‌کار حذف شد.",
+	})
 }
 
 func itoa(n int) string {

@@ -111,7 +111,7 @@ func (r *Questions) PersistAnswer(ctx context.Context, q *question.Question) err
 		`UPDATE questions SET status = 'answered', answer = $3, answered_by = $4, answered_at = now()
 		 WHERE id = $1 AND org_id = $2 AND status = 'open'`,
 		q.ID, q.OrgID, q.Answer, q.AnsweredBy)
-	return expectAffected(tag, err, "question already answered or missing")
+	return expectAffected(tag, err, "سؤال قبلاً پاسخ داده شده است یا یافت نشد")
 }
 
 func collectQuestions(rows pgx.Rows) ([]*question.Question, error) {

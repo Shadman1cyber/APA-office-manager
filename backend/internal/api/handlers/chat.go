@@ -3,6 +3,7 @@ package handlers
 import (
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/apa/backend/internal/application"
 	"github.com/apa/backend/internal/application/chat"
@@ -10,7 +11,8 @@ import (
 )
 
 type chatRequest struct {
-	Message string `json:"message"`
+	Message  string     `json:"message"`
+	Deadline *time.Time `json:"deadline"`
 }
 
 func (h *Handlers) Chat(w http.ResponseWriter, r *http.Request) {
@@ -24,7 +26,11 @@ func (h *Handlers) Chat(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, h.deps.Log, err)
 		return
 	}
-	reply, err := h.deps.Chat.Handle(r.Context(), actor, req.Message)
+	if req.Deadline != nil && req.Deadline.Before(time.Now()) {
+		writeError(w, r, h.deps.Log, domain.Invalid("deadline", "مهلت باید در آینده باشد"))
+		return
+	}
+	reply, err := h.deps.Chat.Handle(r.Context(), actor, req.Message, req.Deadline)
 	if err != nil {
 		writeError(w, r, h.deps.Log, err)
 		return

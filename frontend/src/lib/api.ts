@@ -1,5 +1,4 @@
-const API_URL =
-  process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080/api/v1";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "/api/v1";
 
 export class ApiError extends Error {
   status: number;
@@ -33,20 +32,40 @@ async function request<T>(
   const tok = token();
   if (tok) headers.Authorization = `Bearer ${tok}`;
 
-  const res = await fetch(`${API_URL}${path}`, {
-    method: options.method ?? "GET",
-    headers,
-    body: options.body === undefined ? undefined : JSON.stringify(options.body),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${API_URL}${path}`, {
+      method: options.method ?? "GET",
+      headers,
+      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+    });
+  } catch {
+    throw new ApiError(
+      0,
+      "network_error",
+      "ارتباط با سرور برقرار نشد؛ اتصال شبکه یا دسترسی به سرور را بررسی کنید."
+    );
+  }
 
   let payload: any = null;
   try {
     payload = await res.json();
-  } catch {}
+  } catch {
+    if (!res.ok) {
+      throw new ApiError(
+        res.status,
+        "server_error",
+        `سرور پاسخ نامعتبر داد (کد ${res.status})؛ لطفاً دوباره تلاش کنید.`
+      );
+    }
+  }
 
   if (!res.ok) {
     const message =
-      payload?.error?.message ?? `request failed (${res.status})`;
+      payload?.error?.message ??
+      (res.status >= 500
+        ? "خطای غیرمنتظره‌ای در سرور رخ داد؛ لطفاً دوباره تلاش کنید."
+        : `درخواست ناموفق بود (کد ${res.status})`);
     const staleAuth =
       res.status === 401 ||
       (res.status === 404 && path === "/auth/me");
@@ -122,6 +141,12 @@ export const api = {
       { method: "PATCH", body }
     );
   },
+  setTaskDeadline(id: string, deadline: string | null) {
+    return request<{ task: import("./types").Task; message: string }>(
+      `/tasks/${id}/deadline`,
+      { method: "PATCH", body: { deadline } }
+    );
+  },
   assignTask(id: string, userId: string) {
     return request<import("./types").Task>(`/tasks/${id}/assign`, {
       method: "POST",
@@ -139,6 +164,12 @@ export const api = {
       learned?: string;
       task?: import("./types").Task;
     }>(`/questions/${id}/answer`, { method: "POST", body: { answer } });
+  },
+  skills() {
+    return request<import("./types").Skill[]>("/skills");
+  },
+  createSkill(body: { name: string; description: string; keywords: string[] }) {
+    return request<import("./types").Skill>("/skills", { method: "POST", body });
   },
   employees() {
     return request<import("./types").User[]>("/employees");
@@ -160,6 +191,26 @@ export const api = {
       method: "PATCH",
       body,
     });
+  },
+  documents(limit = 100) {
+    return request<import("./types").DocumentItem[]>(`/documents?limit=${limit}`);
+  },
+  createManualWorkflow(body: {
+    title: string;
+    intent?: string;
+    deadline?: string;
+    tasks: import("./types").ManualTaskInput[];
+  }) {
+    return request<{ message: string; workflow: import("./types").WorkflowView }>(
+      "/workflows/manual",
+      { method: "POST", body }
+    );
+  },
+  createDocument(body: { content: string; taskId?: string }) {
+    return request<{ document: import("./types").DocumentItem; message: string }>(
+      "/documents",
+      { method: "POST", body }
+    );
   },
   knowledgeOverview() {
     return request<{ peopleCount: number; factCount: number }>("/knowledge");

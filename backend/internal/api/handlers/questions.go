@@ -29,7 +29,7 @@ func (h *Handlers) ListQuestions(w http.ResponseWriter, r *http.Request) {
 	if raw := r.URL.Query().Get("workflowId"); raw != "" {
 		parsed, perr := parseUUID(raw)
 		if perr != nil {
-			writeError(w, r, h.deps.Log, domain.Invalid("workflowId", "invalid workflow id"))
+			writeError(w, r, h.deps.Log, domain.Invalid("workflowId", "شناسه گردش‌کار نامعتبر است"))
 			return
 		}
 		workflowID = &parsed
@@ -50,7 +50,7 @@ func (h *Handlers) AnswerQuestion(w http.ResponseWriter, r *http.Request) {
 	}
 	questionID, err := parseUUID(chi.URLParam(r, "id"))
 	if err != nil {
-		writeError(w, r, h.deps.Log, domain.Invalid("id", "invalid question id"))
+		writeError(w, r, h.deps.Log, domain.Invalid("id", "شناسه سؤال نامعتبر است"))
 		return
 	}
 	var req answerQuestionRequest

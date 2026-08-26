@@ -50,7 +50,7 @@ func NewService(workflows *workflowsvc.Service, questions *questionsvc.Service, 
 	}
 }
 
-func (s *Service) Handle(ctx context.Context, actor *user.User, message string) (*Reply, error) {
+func (s *Service) Handle(ctx context.Context, actor *user.User, message string, deadline *time.Time) (*Reply, error) {
 	message = strings.TrimSpace(message)
 	if message == "" {
 		return &Reply{Text: "چه کاری لازم دارید؟ مثلاً بنویسید: «تهیه گزارش آگاهی سایبری.»", Action: "info"}, nil
@@ -58,7 +58,7 @@ func (s *Service) Handle(ctx context.Context, actor *user.User, message string) 
 
 	lower := strings.ToLower(message)
 
-	reply, err := s.dispatch(ctx, actor, lower, message)
+	reply, err := s.dispatch(ctx, actor, lower, message, deadline)
 	if err != nil {
 		return nil, err
 	}
@@ -66,9 +66,9 @@ func (s *Service) Handle(ctx context.Context, actor *user.User, message string) 
 	return reply, nil
 }
 
-func (s *Service) dispatch(ctx context.Context, actor *user.User, lower, message string) (*Reply, error) {
+func (s *Service) dispatch(ctx context.Context, actor *user.User, lower, message string, deadline *time.Time) (*Reply, error) {
 	switch {
-	case containsAny(lower, "approve", "confirmed", "looks good"):
+	case containsAny(lower, "approve", "confirmed", "looks good", "تأیید", "تایید", "confirm"):
 		sess := s.sessionFor(ctx, actor)
 		if sess.lastWorkflowID == nil {
 			return &Reply{Text: "فعلاً چیزی برای تأیید نیست. اول بگویید چه کاری نیاز دارید.", Action: "info"}, nil
@@ -92,7 +92,7 @@ func (s *Service) dispatch(ctx context.Context, actor *user.User, lower, message
 		wfID := view.Workflow.ID
 		return &Reply{Text: text, Action: "approved", WorkflowID: &wfID, Workflow: view}, nil
 
-	case containsAny(lower, "reject", "discard", "cancel the workflow"):
+	case containsAny(lower, "reject", "discard", "cancel the workflow", "رد", "لغو", "cancel"):
 		sess := s.sessionFor(ctx, actor)
 		if sess.lastWorkflowID == nil {
 			return &Reply{Text: "گردش‌کار فعالی برای رد کردن وجود ندارد. اول درخواست خود را بگویید.", Action: "info"}, nil
@@ -107,16 +107,25 @@ func (s *Service) dispatch(ctx context.Context, actor *user.User, lower, message
 
 	default:
 		sess := s.sessionFor(ctx, actor)
+
+		// pending question from previous workflow
 		if sess.pendingQuestion != nil {
 			pendingID := *sess.pendingQuestion
 			q, err := s.questions.Get(ctx, actor.OrgID, pendingID)
 			if err != nil || q.Status == "answered" {
 				sess.pendingQuestion = nil
 			} else {
-				return s.handleAnswer(ctx, actor, sess, pendingID, message)
+				return s.handleAnswer(ctx, actor, sess, pendingID, message, deadline)
 			}
 		}
-		return s.handleNewIntent(ctx, actor, message)
+
+		// smalltalk → conversational reply (no workflow creation)
+		intent := ai.ClassifyIntent(message)
+		if intent == ai.IntentKindSmallTalk {
+			return s.handleSmallTalk(ctx, actor, sess)
+		}
+
+		return s.handleNewIntent(ctx, actor, message, deadline)
 	}
 }
 
@@ -170,12 +179,12 @@ func tehranDayRange(day string) (time.Time, time.Time, error) {
 	return parsed, parsed.Add(24 * time.Hour), nil
 }
 
-func (s *Service) handleAnswer(ctx context.Context, actor *user.User, sess *session, questionID uuid.UUID, message string) (*Reply, error) {
+func (s *Service) handleAnswer(ctx context.Context, actor *user.User, sess *session, questionID uuid.UUID, message string, deadline *time.Time) (*Reply, error) {
 	result, err := s.questions.Answer(ctx, actor, questionID, message)
 	if err != nil {
 		if strings.Contains(err.Error(), "already answered") {
 			sess.pendingQuestion = nil
-			return s.handleNewIntent(ctx, actor, message)
+			return s.handleNewIntent(ctx, actor, message, deadline)
 		}
 		return nil, err
 	}
@@ -216,19 +225,38 @@ func (s *Service) handleAnswer(ctx context.Context, actor *user.User, sess *sess
 	return reply, nil
 }
 
-func (s *Service) handleNewIntent(ctx context.Context, actor *user.User, message string) (*Reply, error) {
-	view, err := s.workflows.Create(ctx, actor, message)
+func (s *Service) handleSmallTalk(ctx context.Context, actor *user.User, sess *session) (*Reply, error) {
+	// If there's a last workflow with pending questions, mention it
+	if sess.lastWorkflowID != nil {
+		open, err := s.questions.OpenForWorkflow(ctx, actor.OrgID, *sess.lastWorkflowID)
+		if err == nil && len(open) > 0 {
+			next := open[0]
+			sess.pendingQuestion = &next.ID
+			return &Reply{
+				Text:       next.Text,
+				Action:     "info",
+				QuestionID: &next.ID,
+			}, nil
+		}
+	}
+
+	replies := []string{
+		"سلام! خوش آمدید. کاری هست که بتوانم کمکتان کنم؟ مثلاً بنویسید: «تهیه گزارش آگاهی سایبری.»",
+		"خوش آمدید! اگر کاری پیش آمد، بگویید تا برنامه‌اش را آماده کنم.",
+		"خوش آمدید! برای شروع یک کار جدید، کافیست بنویسید چه می‌خواهید انجام دهید.",
+		"سلام! من اینجا هستم تا درخواست‌هایتان را به وظایف تبدیل کنم. هر وقت آماده بودید، بگویید.",
+		"خوش آمدید! می‌توانم برایتان گردش‌کار بسازم. فقط کافیست بگویید چه کاری نیاز دارید.",
+	}
+	reply := replies[len(actor.Name)%len(replies)]
+	return &Reply{Text: reply, Action: "info"}, nil
+}
+
+func (s *Service) handleNewIntent(ctx context.Context, actor *user.User, message string, deadline *time.Time) (*Reply, error) {
+	view, err := s.workflows.Create(ctx, actor, message, deadline)
 	if err != nil {
 		if errors.Is(err, domain.ErrForbidden) {
 			return &Reply{
 				Text:   "ثبت درخواست جدید فقط برای مدیران فعال است. اگر کاری به شما تخصیص یافته، از صفحهٔ وظایف پیگیری کنید.",
-				Action: "info",
-			}, nil
-		}
-		if errors.Is(err, ai.ErrSmallTalk) {
-			return &Reply{
-				Text: "سلام! من درخواست‌ها را به برنامه‌های تأییدشده و تخصیص‌یافته تبدیل می‌کنم. کاری که نیاز دارید بگویید — " +
-					"مثلاً «تهیه گزارش آگاهی سایبری.» همچنین می‌توانید به سؤال‌های باز پاسخ دهید یا بگویید «تأیید».",
 				Action: "info",
 			}, nil
 		}

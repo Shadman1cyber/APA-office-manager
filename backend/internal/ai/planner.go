@@ -169,7 +169,18 @@ func (l *llmPlanningAgent) ProposePlan(ctx context.Context, intent IntentResult,
 func describePeople(org *OrgContext) string {
 	names := make([]string, 0, len(org.People))
 	for _, p := range org.People {
-		names = append(names, fmt.Sprintf("%s (skills: %s)", p.Name, strings.Join(p.Skills, ", ")))
+		names = append(names, fmt.Sprintf("%s (skills: %s)", p.Name, describePersonSkills(p)))
 	}
 	return strings.Join(names, "; ")
+}
+
+func describePersonSkills(p PersonInfo) string {
+	if len(p.SkillDetail) == 0 {
+		return strings.Join(p.Skills, ", ")
+	}
+	parts := make([]string, 0, len(p.SkillDetail))
+	for _, sd := range p.SkillDetail {
+		parts = append(parts, fmt.Sprintf("%s [%s]", sd.Name, sd.Description))
+	}
+	return strings.Join(parts, "؛ ")
 }

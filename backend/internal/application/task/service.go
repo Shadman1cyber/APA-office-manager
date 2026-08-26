@@ -23,6 +23,10 @@ import (
 
 const VerifyJobType = "verify_task"
 
+type Documenter interface {
+	EnqueueForTask(ctx context.Context, actor *user.User, t *domaintask.Task, notes string) error
+}
+
 type Deps struct {
 	Tasks        application.TaskRepository
 	Workflows    application.WorkflowRepository
@@ -32,6 +36,7 @@ type Deps struct {
 	Orchestrator *ai.Orchestrator
 	Bus          *application.Bus
 	Jobs         application.JobEnqueuer
+	Documenter   Documenter
 	Log          *slog.Logger
 }
 
@@ -67,6 +72,22 @@ func (s *Service) ListAvailable(ctx context.Context, actor *user.User, limit int
 		limit = 100
 	}
 	return s.deps.Tasks.ListAvailable(ctx, actor.OrgID, limit)
+}
+
+func (s *Service) SetDeadline(ctx context.Context, actor *user.User, id uuid.UUID, deadline *time.Time) error {
+	if !actor.Role.CanApprove() {
+		return fmt.Errorf("%w: تنظیم مهلت فقط برای مدیران مجاز است", domain.ErrForbidden)
+	}
+	if deadline != nil && deadline.Before(time.Now()) {
+		return domain.Invalid("deadline", "مهلت باید در آینده باشد")
+	}
+	if err := s.deps.Tasks.SetDeadline(ctx, actor.OrgID, id, deadline); err != nil {
+		return err
+	}
+	s.publishSystem(ctx, actor.OrgID, application.EventType("TASK_DEADLINE_SET"), "task", id, map[string]any{
+		"deadline": deadline,
+	})
+	return nil
 }
 
 func (s *Service) Claim(ctx context.Context, actor *user.User, id uuid.UUID) (*domaintask.Task, error) {
@@ -164,6 +185,11 @@ func (s *Service) Complete(ctx context.Context, actor *user.User, id uuid.UUID, 
 	payload, _ := json.Marshal(map[string]string{"task_id": t.ID.String(), "org_id": t.OrgID.String()})
 	if err := s.deps.Jobs.Enqueue(ctx, VerifyJobType, payload, time.Now().UTC().Add(time.Second)); err != nil {
 		s.deps.Log.ErrorContext(ctx, "enqueue verification job failed", slog.Any("error", err))
+	}
+	if s.deps.Documenter != nil {
+		if derr := s.deps.Documenter.EnqueueForTask(ctx, actor, t, notes); derr != nil {
+			s.deps.Log.ErrorContext(ctx, "enqueue document job failed", slog.Any("error", derr))
+		}
 	}
 	return s.deps.Tasks.Get(ctx, actor.OrgID, id)
 }

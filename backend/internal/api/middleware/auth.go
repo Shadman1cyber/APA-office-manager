@@ -93,12 +93,12 @@ func Auth(tm *TokenManager) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			header := r.Header.Get("Authorization")
 			if !strings.HasPrefix(header, "Bearer ") {
-				writeAuthError(w, "missing bearer token")
+				writeAuthError(w, "برای ادامه ابتدا وارد شوید.")
 				return
 			}
 			identity, err := tm.Parse(strings.TrimPrefix(header, "Bearer "))
 			if err != nil {
-				writeAuthError(w, "invalid or expired token")
+				writeAuthError(w, "نشست شما منقضی شده است؛ دوباره وارد شوید.")
 				return
 			}
 			ctx := context.WithValue(r.Context(), identityKey, identity)

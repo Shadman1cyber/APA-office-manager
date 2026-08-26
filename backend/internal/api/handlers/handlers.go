@@ -6,11 +6,13 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/apa/backend/internal/ai"
 	"github.com/apa/backend/internal/api/middleware"
 	"github.com/apa/backend/internal/application"
 	"github.com/apa/backend/internal/application/chat"
+	documentsvc "github.com/apa/backend/internal/application/document"
 	"github.com/apa/backend/internal/application/knowledge"
 	"github.com/apa/backend/internal/application/question"
 	"github.com/apa/backend/internal/application/task"
@@ -22,6 +24,7 @@ type Deps struct {
 	Tokens    *middleware.TokenManager
 	Users     application.UserRepository
 	Orgs      application.OrganizationRepository
+	Skills    application.SkillRepository
 	Bus       *application.Bus
 	Log       *slog.Logger
 	Ping      func(ctx context.Context) error
@@ -29,6 +32,7 @@ type Deps struct {
 	Tasks     *tasksvc.Service
 	Questions *questionsvc.Service
 	Knowledge *knowledgesvc.Service
+	Documents *documentsvc.Service
 	Chat      *chatsvc.Service
 }
 
@@ -79,7 +83,7 @@ func writeError(w http.ResponseWriter, r *http.Request, log *slog.Logger, err er
 		code, status = "approval_required", http.StatusAccepted
 	case errors.Is(err, ai.ErrSmallTalk):
 		code, status = "not_a_task", http.StatusUnprocessableEntity
-	case errors.Is(err, domain.ErrEmailTaken):
+	case errors.Is(err, domain.ErrAlreadyExists) || errors.Is(err, domain.ErrEmailTaken):
 		code, status = "conflict", http.StatusConflict
 	case errors.Is(err, domain.ErrInsufficientData):
 		code, status = "insufficient_data", http.StatusUnprocessableEntity
@@ -107,12 +111,36 @@ func writeError(w http.ResponseWriter, r *http.Request, log *slog.Logger, err er
 }
 
 func publicMessage(code string, err error) string {
-	switch code {
-	case "internal_error":
-		return "something went wrong; please retry"
-	case "ai_output_invalid":
-		return "the AI service returned an unusable response"
-	default:
-		return err.Error()
+	msg := err.Error()
+
+	persianFallbacks := map[string]string{
+		"internal_error":    "خطای غیرمنتظره‌ای پیش آمد؛ لطفاً دوباره تلاش کنید.",
+		"not_found":         "مورد درخواستی پیدا نشد.",
+		"forbidden":         "اجازهٔ انجام این کار را ندارید.",
+		"unauthorized":      "ابتدا وارد حساب خود شوید.",
+		"invalid_state":     "این عملیات در وضعیت فعلی ممکن نیست.",
+		"insufficient_data": "اطلاعات کافی برای انجام این کار وجود ندارد.",
+		"ai_output_invalid": "پاسخ هوش مصنوعی قابل استفاده نبود؛ لطفاً دوباره تلاش کنید.",
+		"conflict":          "این مورد قبلاً ثبت شده است.",
 	}
+
+	if idx := strings.Index(msg, ": "); idx > 0 && !hasPersian(msg[:idx]) {
+		msg = msg[idx+2:]
+	}
+	if hasPersian(msg) {
+		return msg
+	}
+	if fb, ok := persianFallbacks[code]; ok {
+		return fb
+	}
+	return msg
+}
+
+func hasPersian(s string) bool {
+	for _, r := range s {
+		if r >= 0x0600 && r <= 0x06FF {
+			return true
+		}
+	}
+	return false
 }

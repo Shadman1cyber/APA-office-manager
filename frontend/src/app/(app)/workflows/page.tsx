@@ -2,11 +2,15 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
+import { getCachedUser } from "@/lib/auth";
 import type { Workflow } from "@/lib/types";
-import { Badge, Card, Spinner } from "@/components/ui";
+import { Badge, Button, Card, Spinner } from "@/components/ui";
 
 export default function WorkflowsPage() {
+  const router = useRouter();
+  const manager = getCachedUser()?.role === "manager";
   const [workflows, setWorkflows] = useState<Workflow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -19,10 +23,15 @@ export default function WorkflowsPage() {
 
   return (
     <div className="mx-auto max-w-4xl px-8 py-8">
-      <h1 className="mb-1 text-xl font-semibold">گردش‌کارها</h1>
-      <p className="mb-6 text-sm text-slate-500">
-        درخواست هر مدیر، برنامهٔ پیشنهادی آن و چرخهٔ حیاتش.
-      </p>
+      <div className="mb-6 flex items-start justify-between gap-4">
+        <div>
+          <h1 className="mb-1 text-xl font-semibold">گردش‌کارها</h1>
+          <p className="text-sm text-slate-500">درخواست هر مدیر، برنامهٔ پیشنهادی آن و چرخهٔ حیاتش.</p>
+        </div>
+        {manager && (
+          <Button onClick={() => router.push("/workflows/new")}>+ گردش‌کار جدید</Button>
+        )}
+      </div>
 
       {error && (
         <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>

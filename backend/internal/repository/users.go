@@ -31,7 +31,7 @@ func (r *Users) Create(ctx context.Context, u *user.User, passwordHash string) e
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			return fmt.Errorf("%w", domain.ErrEmailTaken)
+			return fmt.Errorf("%w: این ایمیل قبلاً استفاده شده است", domain.ErrAlreadyExists)
 		}
 	}
 	return mapErr(err)

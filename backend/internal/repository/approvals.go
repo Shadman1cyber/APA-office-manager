@@ -49,5 +49,5 @@ func (r *Approvals) Decide(ctx context.Context, id uuid.UUID, status approval.St
 		`UPDATE approvals SET status = $2, decided_by = $3, decided_at = $4
 		 WHERE id = $1 AND status = 'pending'`,
 		id, string(status), decidedBy, at)
-	return expectAffected(tag, err, "approval already decided")
+	return expectAffected(tag, err, "این تأیید قبلاً تصمیم‌گیری شده است")
 }

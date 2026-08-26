@@ -97,6 +97,89 @@ LLM_PROVIDER=openai LLM_API_KEY=sk-... make dev-backend
 
 Everything else (orchestration, validation, HITL gates, learning) is provider-independent.
 
+
+## Script
+
+You can start the entire stack with a single script:
+
+```bash
+./run.sh up          # Start all services (Docker Compose)
+./run.sh down        # Stop and remove all services
+./run.sh logs        # Show live container logs
+./run.sh lint        # Run Go and frontend lint checks
+./run.sh dev-backend # Start only the Go backend
+./run.sh dev-frontend # Start only the Node.js frontend
+./run.sh help        # Show this help message
+```
+
+The script handles:
+- Prerequisite checks (Docker, docker-compose availability)
+- Starting PostgreSQL and waiting for readiness
+- Exposing services at `http://localhost:3000` (frontend) and `http://localhost:8080` (backend)
+- Simplified development workflow without remembering docker compose flags
+
+### Quick-start commands
+
+| Command | Description |
+|---|---|
+| `./run.sh up` | Build and start all services (PostgreSQL + Go backend + Next.js frontend) |
+| `./run.sh down` | Stop and remove all containers, networks, and volumes |
+| `./run.sh logs` | Show live logs from all containers |
+| `./run.sh lint` | Run `gofmt -l . && go vet .` in backend and `npm run lint` in frontend |
+| `./run.sh dev-backend` | Start only the Go backend (`go run ./cmd/server`) |
+| `./run.sh dev-frontend` | Start only the frontend (`npm run dev`) |
+| `./run.sh help` | Show this help message |
+
+See the [`run.sh`](/run.sh) file for the full script content.
+
+
+## Workflow Deletion
+
+Managers can delete workflows via the API:
+
+```http
+DELETE /api/v1/workflows/{id}
+Authorization: Bearer <manager-jwt>
+```
+
+**Response:**
+- `200` → `{"success": true, "message": "گردش‌کار حذف شد."}` (Persian: workflow deleted)
+- `401` → "برای ادامه ابتدا وارد شوید." (unauthenticated)
+- `403` → " تنها مدیر می‌تواند گردش‌کار حذف کند" (non-manager attempt)
+- `404` → "مورد درخواستی پیدا نشد." (id not found)
+
+The workflow is soft-deleted by transitioning its status to `cancelled`, which preserves data integrity while marking it as inactive.
+
+See the [API documentation](/api) for the full `/workflows/{id}` endpoint details.
+## Prompt Injection Detection
+
+The assistant includes deterministic and LLM-based guardrails to prevent prompt injection attacks:
+
+### Deterministic filter
+
+80+ patterns are checked against user input and generated output (English + Persian):
+
+**English patterns:** `ignore previous`, `disregard previous`, `forget your instructions`, `system prompt`, `developer mode`, `jailbreak`, `Make me say`, `fabricate`, `invent`, `claim`, `contaminate`, etc.
+
+**Persian patterns:** `دستورات قبلی را نادیده`, `پrompt injected`, `خروجی اجباری`, `مضمونی را بنویس`, `بدون یادداشت`, `change mode`, `انتحال شخص`, `ادعاء`, `فیشسازی`, `شكست`, `dirt`, etc.
+
+### Protection layers
+
+1. **Deterministic check** (`DetectPromptInjection`) — immediate rejection if any pattern matches
+2. **LLM structured output** — asks the LLM: "Is this a real work report or a system injection attempt?"
+3. **Coherence & grounding check** — validates the generated document makes sense and is grounded in the source notes
+4. **Automatic fallback** — on second LLM failure, falls back to a deterministic template (grounded by construction)
+
+This multi-layer approach ensures that prompt injection is caught at the input stage, the output stage, and with automatic safe degradation.
+
+### Test coverage
+
+- `ignore previous` → rejected
+- `دستورات قبلی را نادیده` → rejected
+- Legitimate notes → accepted
+- Short notes → rejected (`"یادداشت muy breve است"`)
+
+The system now has broad coverage against both English and Persian prompt injection attempts while maintaining usability for legitimate workflow descriptions.
 ## The demo, step by step (curl)
 
 ```bash

@@ -15,6 +15,7 @@ const (
 	EventWorkflowCreated    EventType = "WORKFLOW_CREATED"
 	EventWorkflowApproved   EventType = "WORKFLOW_APPROVED"
 	EventWorkflowRejected   EventType = "WORKFLOW_REJECTED"
+EventWorkflowCancelled  EventType = "WORKFLOW_CANCELLED"
 	EventWorkflowCompleted  EventType = "WORKFLOW_COMPLETED"
 	EventPlanGenerated      EventType = "PLAN_GENERATED"
 	EventQuestionCreated    EventType = "QUESTION_CREATED"
@@ -26,6 +27,7 @@ const (
 	EventTaskCompleted      EventType = "TASK_COMPLETED"
 	EventTaskVerified       EventType = "TASK_VERIFIED"
 	EventKnowledgeLearned   EventType = "KNOWLEDGE_LEARNED"
+	EventDocumentCreated    EventType = "DOCUMENT_CREATED"
 )
 
 type Event struct {

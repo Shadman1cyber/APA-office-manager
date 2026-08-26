@@ -15,11 +15,11 @@ import (
 
 func decodeJSON(r *http.Request, target any) error {
 	if r.Body == nil {
-		return domain.Invalid("body", "request body is required")
+		return domain.Invalid("body", "بدنهٔ درخواست الزامی است")
 	}
 	dec := json.NewDecoder(r.Body)
 	if err := dec.Decode(target); err != nil {
-		return domain.Invalid("body", "invalid JSON payload")
+		return domain.Invalid("body", "قالب درخواست معتبر نیست")
 	}
 	return nil
 }

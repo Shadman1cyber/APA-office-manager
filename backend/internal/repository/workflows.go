@@ -94,5 +94,5 @@ func (r *Workflows) UpdateStatusExpected(ctx context.Context, orgID, id uuid.UUI
 		`UPDATE workflows SET status = $4, updated_at = now()
 		 WHERE id = $1 AND org_id = $2 AND status = $3`,
 		id, orgID, string(from), string(to))
-	return expectAffected(tag, err, "workflow state changed concurrently")
+	return expectAffected(tag, err, "وضعیت گردش‌کار هم‌زمان تغییر کرده است؛ صفحه را تازه‌سازی کنید")
 }
