@@ -75,15 +75,6 @@ export default function LoginPage() {
             {busy ? "در حال ورود…" : "ورود"}
           </Button>
         </form>
-
-
-
-        <p className="mt-5 text-center text-sm text-slate-500">
-          حساب ندارید؟{" "}
-          <Link href="/register" className="font-medium text-indigo-600 hover:underline">
-            ساخت حساب کاربری
-          </Link>
-        </p>
       </Card>
     </main>
   );

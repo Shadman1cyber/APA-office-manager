@@ -45,7 +45,7 @@ func (h *Handlers) CreateEmployee(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, h.deps.Log, err)
 		return
 	}
-	if !actor.Role.CanApprove() {
+	if actor.Role != user.RoleAdmin {
 		writeError(w, r, h.deps.Log, domain.ErrForbidden)
 		return
 	}

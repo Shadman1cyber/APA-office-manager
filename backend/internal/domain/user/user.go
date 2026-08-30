@@ -10,16 +10,17 @@ import (
 type Role string
 
 const (
-	RoleManager Role = "manager"
-	RoleMember  Role = "member"
+	RoleAdmin    Role = "admin"
+	RoleManager  Role = "manager"
+	RoleMember   Role = "member"
 )
 
 func (r Role) Valid() bool {
-	return r == RoleManager || r == RoleMember
+	return r == RoleAdmin || r == RoleManager || r == RoleMember
 }
 
 func (r Role) CanApprove() bool {
-	return r == RoleManager
+	return r == RoleAdmin || r == RoleManager
 }
 
 type User struct {
